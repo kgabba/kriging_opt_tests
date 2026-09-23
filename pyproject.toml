@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aniso-ok-tuner-v2"
+version = "0.2.0"
+description = "Nested Optuna OK tuner: outer variography × inner neighbourhood"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24",
+  "pandas>=2.0",
+  "scipy>=1.10",
+  "optuna>=3.0",
+  "matplotlib>=3.7",
+  "PyYAML>=6.0",
+]
+
+[project.scripts]
+aniso-ok-tuner-v2 = "aniso_ok_tuner_v2.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["aniso_ok_tuner_v2*"]
