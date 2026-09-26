@@ -1,23 +1,26 @@
 n_min_points: 15
 
-outer:
-  n_trials: 3
-  seed: 42
-  n_startup_trials: 2
-  n_lags_min: 10
-  n_lags_max: 12
-  max_dist_percentile_min: 45.0
-  max_dist_percentile_max: 55.0
-  tolerance_deg_min: 18.0
-  tolerance_deg_max: 22.0
-  radius_prior_scale_min: 1.2
-  radius_prior_scale_max: 1.5
+variogram_map:
+  n_lags: 10
+  max_dist_percentile: 50.0
+
+moi:
+  max_lag_fraction: 0.8
+  eps: 1.0e-8
+
+rose:
+  step_deg: 15.0
+  n_lags: 8
+  max_dist_percentile: 50.0
   min_pairs: 5
 
-inner:
-  n_trials: 10
-  seed: 42
-  n_startup_trials: 4
+directional:
+  tolerance_deg: 25.0
+  n_lags: 8
+  max_dist_percentile: 50.0
+  min_pairs: 5
+
+search_space:
   radius_margin: 0.20
   nugget_margin: 0.20
   range_scale_min: 0.80
@@ -31,5 +34,8 @@ delete_d:
   seed: 42
 
 optuna:
-  invalid_penalty: 1000000.0
+  n_trials: 20
+  seed: 42
+  n_startup_trials: 8
   n_ei_candidates: 32
+  invalid_penalty: 1000000.0

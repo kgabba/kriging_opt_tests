@@ -1,5 +1,5 @@
-# Default = anisotropic (MOI ellipse). For circle search use configs/isotropic.yaml
-isotropic: false
+# Temporary isotropic OK experiment (circle search). Flip isotropic:false to roll back.
+isotropic: true
 
 n_min_points: 15
 
@@ -25,6 +25,8 @@ directional:
 
 search_space:
   radius_margin: 0.20
+  # Exp8-like: search radius prior ~ 1.5 × fitted range
+  radius_prior_scale: 1.5
   nugget_margin: 0.20
   range_scale_min: 0.80
   range_scale_max: 1.20
@@ -37,7 +39,7 @@ delete_d:
   seed: 42
 
 optuna:
-  n_trials: 120
+  n_trials: 1000
   seed: 42
   n_startup_trials: null
   n_ei_candidates: 64

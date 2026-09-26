@@ -1,4 +1,4 @@
-"""Inner search-space bounds from fitted ranges."""
+"""Data-driven Optuna bounds for OK tuner."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from .cv import ModelFixed
 
 
 @dataclass(frozen=True)
-class InnerSpace:
+class SearchSpace:
     r_major_min: float
     r_major_max: float
     r_minor_min: float
@@ -19,7 +19,7 @@ class InnerSpace:
     range_scale_max: float
     nmax_min: int
     nmax_max: int
-    isotropic: bool
+    isotropic: bool = False
 
     def as_dict(self) -> dict:
         d = {
@@ -36,7 +36,7 @@ class InnerSpace:
         return d
 
 
-def build_inner_space(
+def build_search_space(
     fixed: ModelFixed,
     *,
     radius_margin: float = 0.20,
@@ -46,7 +46,12 @@ def build_inner_space(
     nmax_min: int = 5,
     nmax_max: int = 40,
     radius_prior_scale: float = 1.0,
-) -> InnerSpace:
+) -> SearchSpace:
+    """±margin windows around ranges and fitted nugget; scale box from config.
+
+    For isotropic mode, search radius prior centre is
+    ``a_major * radius_prior_scale`` (Exp8 used ~1.5×range).
+    """
     m = float(radius_margin)
     c0 = max(float(fixed.nugget_fit), 0.0)
     nm = float(nugget_margin)
@@ -61,20 +66,32 @@ def build_inner_space(
 
     if fixed.isotropic:
         r0 = max(float(fixed.a_major) * float(radius_prior_scale), 1e-6)
-        return InnerSpace(
-            r_major_min=r0 * (1.0 - m), r_major_max=r0 * (1.0 + m),
-            r_minor_min=r0 * (1.0 - m), r_minor_max=r0 * (1.0 + m),
-            nugget_min=float(nug_lo), nugget_max=float(nug_hi),
-            range_scale_min=float(range_scale_min), range_scale_max=float(range_scale_max),
-            nmax_min=int(nmax_min), nmax_max=int(nmax_max), isotropic=True,
+        return SearchSpace(
+            r_major_min=r0 * (1.0 - m),
+            r_major_max=r0 * (1.0 + m),
+            r_minor_min=r0 * (1.0 - m),
+            r_minor_max=r0 * (1.0 + m),
+            nugget_min=float(nug_lo),
+            nugget_max=float(nug_hi),
+            range_scale_min=float(range_scale_min),
+            range_scale_max=float(range_scale_max),
+            nmax_min=int(nmax_min),
+            nmax_max=int(nmax_max),
+            isotropic=True,
         )
 
-    rmj = max(float(fixed.a_major) * float(radius_prior_scale), 1e-6)
-    rmn = max(float(fixed.a_minor) * float(radius_prior_scale), 1e-6)
-    return InnerSpace(
-        r_major_min=rmj * (1.0 - m), r_major_max=rmj * (1.0 + m),
-        r_minor_min=rmn * (1.0 - m), r_minor_max=rmn * (1.0 + m),
-        nugget_min=float(nug_lo), nugget_max=float(nug_hi),
-        range_scale_min=float(range_scale_min), range_scale_max=float(range_scale_max),
-        nmax_min=int(nmax_min), nmax_max=int(nmax_max), isotropic=False,
+    rmj = max(float(fixed.a_major), 1e-6)
+    rmn = max(float(fixed.a_minor), 1e-6)
+    return SearchSpace(
+        r_major_min=rmj * (1.0 - m),
+        r_major_max=rmj * (1.0 + m),
+        r_minor_min=rmn * (1.0 - m),
+        r_minor_max=rmn * (1.0 + m),
+        nugget_min=float(nug_lo),
+        nugget_max=float(nug_hi),
+        range_scale_min=float(range_scale_min),
+        range_scale_max=float(range_scale_max),
+        nmax_min=int(nmax_min),
+        nmax_max=int(nmax_max),
+        isotropic=False,
     )

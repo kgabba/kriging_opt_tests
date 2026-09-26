@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "aniso-ok-tuner-v2"
-version = "0.2.0"
-description = "Nested Optuna OK tuner: outer variography × inner neighbourhood"
+name = "aniso-ok-tuner"
+version = "0.1.0"
+description = "Domain-wise anisotropic OK tuner: MOI priors + Optuna delete-d (trial logs)"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -18,8 +18,8 @@ dependencies = [
 ]
 
 [project.scripts]
-aniso-ok-tuner-v2 = "aniso_ok_tuner_v2.cli:main"
+aniso-ok-tuner = "aniso_ok_tuner.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["aniso_ok_tuner_v2*"]
+include = ["aniso_ok_tuner*"]
