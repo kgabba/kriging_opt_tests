@@ -9,7 +9,15 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-METHODS = ("loo", "kfold5", "spatial_block", "buffer", "buffered_delete_d")
+# Default batch: production CV only. Pass --methods loo kfold5 … for legacy.
+DEFAULT_METHODS = ("spatial_block", "buffered_delete_d")
+ALL_METHODS = (
+    "spatial_block",
+    "buffered_delete_d",
+    "loo",
+    "kfold5",
+    "buffer",
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -20,8 +28,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--methods",
         nargs="+",
-        default=list(METHODS),
-        choices=list(METHODS),
+        default=list(DEFAULT_METHODS),
+        choices=list(ALL_METHODS),
+        help="CV methods (default: spatial_block buffered_delete_d)",
     )
     p.add_argument("--python", type=Path, default=ROOT.parent / ".venv" / "bin" / "python")
     args = p.parse_args(argv)

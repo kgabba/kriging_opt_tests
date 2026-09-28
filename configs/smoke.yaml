@@ -28,6 +28,12 @@ search_space:
   nmax_min: 5
   nmax_max: 30
 
+cv:
+  method: spatial_block
+  grid_nx: 3
+  grid_ny: 3
+  seed: 42
+
 delete_d:
   holdout_size: null
   n_repeats: 8

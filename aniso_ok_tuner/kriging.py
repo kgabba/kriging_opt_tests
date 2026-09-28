@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import numpy as np
 
+# Soft rescue when search neighbourhood is empty: take this many nearest
+# (same metric as the search). Avoids the old jump empty → N_max.
+DEFAULT_N_FALLBACK = 4
+
 
 def rotate_to_major(xy: np.ndarray, alpha_deg: float) -> np.ndarray:
     """Rotate so major axis aligns with +x' (math CCW from +X)."""
@@ -67,8 +71,15 @@ def ordinary_kriging_elliptical(
     r_major: float,
     r_minor: float,
     n_max: int,
+    n_fallback: int = DEFAULT_N_FALLBACK,
 ) -> np.ndarray:
     """Point OK with anisotropic metric + elliptical neighbourhood.
+
+    Neighbour selection
+    -------------------
+    Prefer samples inside the search ellipse (capped at ``n_max``).
+    If the ellipse is empty, take ``n_fallback`` nearest by the anisotropy
+    metric (soft rescue — not a full ``n_max`` grab from anywhere).
 
     Parameters
     ----------
@@ -86,11 +97,13 @@ def ordinary_kriging_elliptical(
         Search ellipse semi-axes.
     n_max :
         Cap on neighbours inside the ellipse.
+    n_fallback :
+        Soft kNN size when the ellipse is empty (default 4).
 
     Returns
     -------
     np.ndarray
-        Predictions; NaN if system fails / no neighbours (after kNN fallback empty).
+        Predictions; NaN only if no known samples at all.
     """
     known_xy = np.asarray(known_xy, dtype=float)
     known_z = np.asarray(known_z, dtype=float).reshape(-1)
@@ -103,8 +116,6 @@ def ordinary_kriging_elliptical(
         return np.full(m, np.nan)
 
     a_maj = max(float(a_major) * float(range_scale), 1e-8)
-    a_min = max(float(a_minor) * float(range_scale), 1e-8)
-    # keep geometric K from base ranges (scale cancels in ratio); use scaled for metric range
     k_base_maj = max(float(a_major), 1e-8)
     k_base_min = max(float(a_minor), 1e-8)
 
@@ -113,6 +124,7 @@ def ordinary_kriging_elliptical(
 
     preds = np.empty(m, dtype=float)
     n_max_i = max(int(n_max), 1)
+    n_fb = max(int(n_fallback), 1)
     nug = max(float(nugget), 0.0)
     sil = max(float(sill), 1e-12)
 
@@ -122,16 +134,16 @@ def ordinary_kriging_elliptical(
         inside = elliptical_mask(dx, dy, r_major, r_minor)
         if np.any(inside):
             idx = np.where(inside)[0]
+            if idx.size > n_max_i:
+                d_met = anisotropic_metric_distance(
+                    dx[idx], dy[idx], k_base_maj, k_base_min
+                )
+                keep = np.argpartition(d_met, n_max_i - 1)[:n_max_i]
+                idx = idx[keep]
         else:
-            # fallback: nearest by anisotropic metric
             d_all = anisotropic_metric_distance(dx, dy, k_base_maj, k_base_min)
-            k = min(n_max_i, n_known)
+            k = min(n_fb, n_known)
             idx = np.argpartition(d_all, k - 1)[:k]
-
-        if idx.size > n_max_i:
-            d_met = anisotropic_metric_distance(dx[idx], dy[idx], k_base_maj, k_base_min)
-            keep = np.argpartition(d_met, n_max_i - 1)[:n_max_i]
-            idx = idx[keep]
 
         c = known_r[idx]
         zz = known_z[idx]
@@ -140,7 +152,6 @@ def ordinary_kriging_elliptical(
             preds[i] = np.nan
             continue
 
-        # pairwise distances in aniso metric; isotropic spherical range = a_maj
         dx_ij = c[:, None, 0] - c[None, :, 0]
         dy_ij = c[:, None, 1] - c[None, :, 1]
         D = anisotropic_metric_distance(dx_ij, dy_ij, k_base_maj, k_base_min)
@@ -149,7 +160,6 @@ def ordinary_kriging_elliptical(
         dy0 = c[:, 1] - pred_r[i, 1]
         d0 = anisotropic_metric_distance(dx0, dy0, k_base_maj, k_base_min)
 
-        # Ordinary Kriging system with Lagrange multiplier
         A = np.ones((n + 1, n + 1), dtype=float)
         A[:n, :n] = spherical_gamma(D, nug, sil, a_maj)
         A[n, n] = 0.0
@@ -176,8 +186,12 @@ def ordinary_kriging_isotropic(
     range_scale: float,
     radius: float,
     n_max: int,
+    n_fallback: int = DEFAULT_N_FALLBACK,
 ) -> np.ndarray:
-    """Point OK with Euclidean distance and circular neighbourhood (Exp8-style).
+    """Point OK with Euclidean distance and circular neighbourhood.
+
+    Prefer samples inside ``radius`` (capped at ``n_max``). If none, take
+    ``n_fallback`` nearest Euclidean neighbours (soft rescue).
 
     Parameters
     ----------
@@ -187,6 +201,8 @@ def ordinary_kriging_isotropic(
         Circular search radius.
     nugget, sill, n_max :
         As in anisotropic OK.
+    n_fallback :
+        Soft kNN size when the circle is empty (default 4).
     """
     known_xy = np.asarray(known_xy, dtype=float)
     known_z = np.asarray(known_z, dtype=float).reshape(-1)
@@ -201,6 +217,7 @@ def ordinary_kriging_isotropic(
     a = max(float(range_) * float(range_scale), 1e-8)
     r = max(float(radius), 1e-12)
     n_max_i = max(int(n_max), 1)
+    n_fb = max(int(n_fallback), 1)
     nug = max(float(nugget), 0.0)
     sil = max(float(sill), 1e-12)
 
@@ -210,13 +227,12 @@ def ordinary_kriging_isotropic(
         inside = d0_all <= r
         if np.any(inside):
             idx = np.where(inside)[0]
+            if idx.size > n_max_i:
+                keep = np.argpartition(d0_all[idx], n_max_i - 1)[:n_max_i]
+                idx = idx[keep]
         else:
-            k = min(n_max_i, n_known)
+            k = min(n_fb, n_known)
             idx = np.argpartition(d0_all, k - 1)[:k]
-
-        if idx.size > n_max_i:
-            keep = np.argpartition(d0_all[idx], n_max_i - 1)[:n_max_i]
-            idx = idx[keep]
 
         c = known_xy[idx]
         zz = known_z[idx]

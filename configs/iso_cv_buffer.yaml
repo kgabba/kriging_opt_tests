@@ -36,6 +36,7 @@ cv:
   method: buffer
   buffer_radius: 0.4
   seed: 42
+  allow_legacy: true  # LEGACY — only when explicitly requested
 
 optuna:
   n_trials: 800

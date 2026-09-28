@@ -1,32 +1,62 @@
 # Anisotropic Ordinary Kriging Tuner
 
-Per-**Domain** Ordinary Kriging with MOI → directional ranges → **Optuna TPE** on
-neighbourhood / nugget / `range_scale`. Console line + `trials.csv` every trial.
+Per-**Domain** Ordinary Kriging → **Optuna TPE** on neighbourhood / nugget /
+`range_scale`, with **per-trial console + `trials.csv`**.
 
-Variography (pairs, MOI, map/rose, directional spherical fit) comes from sibling
-package [`aniso_idw_mvp`](https://github.com/kgabba/spatial-idw-opt) (or a local
-`../aniso_idw_mvp` checkout).
+Variography comes from sibling [`aniso_idw_mvp`](https://github.com/kgabba/spatial-idw-opt).
+
+## Iso vs aniso
+
+| Config | Behaviour |
+|--------|-----------|
+| `isotropy_mode: auto` | Heuristic (default in `configs/default.yaml`) |
+| `isotropy_mode: force_iso` | Always omni circle OK |
+| `isotropy_mode: force_aniso` | Always MOI ellipse OK |
+| legacy `isotropic: true/false` | Same as force_iso / force_aniso |
+
+**Auto rules** (first match; thresholds under `auto_isotropy`):
+
+1. **Few points** — `n < aniso_min_points` (default **80**) → ISO  
+2. **Hard noise** — max(omni, directional) `nugget/sill ≥ nugget_frac_iso` (default 0.45) → ISO  
+3. **Sparse directional VG** — major/minor lag bins `< min_directional_lags` (default 4) → ISO  
+4. **Inconsistent sills** — major/minor sill ratio `> sill_ratio_max` (default 2.5) → ISO  
+5. **Weak elongation** — `a_maj / a_min < anisotropy_ratio_min` (default 1.3) → ISO  
+6. Else → aniso  
+
+Selection is written to `best_params.json` → `isotropy_selection`
+(`reason`, `metrics`, **`explanation`** — краткая фраза «почему ISO/ANISO»).
+Also `summary.md` per domain and root `summary.md` with a Почему column.
+
+- **isotropic path:** omnidirectional VG → `a_iso`  
+- **anisotropic path:** MOI → major/minor directional ranges  
 
 ## What Optuna tunes
 
 | Param | Window |
 |-------|--------|
-| `R_major`, `R_minor` (aniso) or `R` (iso) | ±`radius_margin` of directional ranges |
+| `R_major`, `R_minor` (aniso) or `R` (iso) | ±`radius_margin` of fitted ranges (`a_iso` or directional) |
 | `N_max` | config box |
 | `nugget` | ±`nugget_margin` of fitted C₀ |
 | `range_scale` | config box (default 0.8–1.2) |
 
-**Fixed** from MOI/variography: `alpha`, base `a_major`/`a_minor`, sill total.
+**Fixed:** iso → `a_iso` + sill; aniso → `alpha`, `a_major`/`a_minor`, sill.
+
+**Neighbourhood:** prefer samples inside search `R` / ellipse (cap `N_max`).
+If empty → soft rescue: **4** nearest (same metric), not a full `N_max` grab.
 
 ## CV methods (`cv.method`)
+
+**Allowed by default** (production):
 
 | Method | Idea |
 |--------|------|
 | `spatial_block` | leave-one-block-out on XY grid (`grid_nx` × `grid_ny`) |
 | `buffered_delete_d` | random delete-d + exclude train within buffer (Euclidean or aniso OK metric; `buffer_scale × a_major`) |
-| `loo` / `kfold5` / `buffer` / `delete_d` | also supported |
 
-Ready-made configs under `configs/` (Jura iso CV suite, Walker aniso spatial / buffered).
+**Legacy** (`loo`, `kfold5`, `buffer`, `delete_d`): require `cv.allow_legacy: true` in the YAML.
+Do not use them unless the user explicitly asks. Default configs use `spatial_block`.
+
+Ready-made: `auto_cv_spatial_block`, Walker aniso spatial/buffered; legacy iso CV suite marked `allow_legacy`.
 
 ## Install
 
@@ -40,6 +70,8 @@ pip install -e .
 
 ```bash
 python tune.py --data path/to/points.csv --config configs/default.yaml --out-dir results/run
+python tune.py --data path/to/points.csv --config configs/auto_cv_spatial_block.yaml \
+  --out-dir results/walker_auto --trials 800
 python tune.py --data path/to/points.csv --config configs/walker_aniso_spatial_block.yaml \
   --out-dir results/walker --trials 800
 ```
