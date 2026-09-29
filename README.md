@@ -34,10 +34,10 @@ Also `summary.md` per domain and root `summary.md` with a Почему column.
 
 | Param | Window |
 |-------|--------|
-| `R` (iso) or `R_major` (aniso) | ±`radius_margin` of fitted ranges (default **±60%**; `a_iso` or directional major) |
+| `R` (iso) or `R_major` (aniso) | ±`radius_margin` of fitted ranges (default **±90%**; `a_iso` or directional major) |
 | `N_max` | config box (default **5–80**) |
 | `nugget` | ±`nugget_margin` of fitted C₀ (default **±60%**) |
-| `range_scale` | config box (default **0.40–1.60**) |
+| `range_scale` | config box (default **0.10–1.90**) |
 
 **`radius_prior_scale` (config):** used **only in ISO** — centre of the `R` box is
 `a_iso × radius_prior_scale` (often 1.5). **ANISO ignores it:** `R_major` box is
@@ -64,6 +64,11 @@ If empty → soft rescue: **4** nearest (same metric), not a full `N_max` grab.
 
 **Legacy** (`loo`, `kfold5`, `buffer`, `delete_d`): require `cv.allow_legacy: true` in the YAML.
 Do not use them unless the user explicitly asks. Default configs use `spatial_block`.
+
+**Outer holdout / early stop** (`outer_holdout` in YAML, on by default): ~15% of
+domain points held out of Optuna CV; each trial also scores that outer set.
+Best θ is chosen by **outer RMSE**; stop if no outer improve for `patience`
+(default **300**). Budget default **1200** trials.
 
 Ready-made: `auto_cv_spatial_block`, Walker aniso spatial/buffered; legacy iso CV suite marked `allow_legacy`.
 

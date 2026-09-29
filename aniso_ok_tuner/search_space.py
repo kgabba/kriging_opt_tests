@@ -57,10 +57,10 @@ class SearchSpace:
 def build_search_space(
     fixed: ModelFixed,
     *,
-    radius_margin: float = 0.60,
+    radius_margin: float = 0.90,
     nugget_margin: float = 0.60,
-    range_scale_min: float = 0.40,
-    range_scale_max: float = 1.60,
+    range_scale_min: float = 0.10,
+    range_scale_max: float = 1.90,
     nmax_min: int = 5,
     nmax_max: int = 80,
     radius_prior_scale: float = 1.0,

@@ -186,6 +186,75 @@ def default_holdout_size(n_sample: int) -> int:
     return int(min(max(5, n_sample // 10), n_sample - 2))
 
 
+def make_outer_holdout_split(
+    n_sample: int,
+    *,
+    fraction: float = 0.15,
+    min_points: int = 10,
+    max_fraction: float = 0.20,
+    min_train: int = 20,
+    seed: int = 43,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Random outer holdout indices for overfit monitoring / early stopping.
+
+    Returns ``(train_idx, outer_idx)`` or ``None`` if the domain is too small
+    to spare a stable outer set.
+    """
+    n = int(n_sample)
+    if n < min_train + min_points:
+        return None
+    frac = float(np.clip(fraction, 0.01, 0.5))
+    max_frac = float(np.clip(max_fraction, frac, 0.5))
+    n_out = int(round(n * frac))
+    n_out = max(int(min_points), n_out)
+    n_out = min(n_out, int(n * max_frac), n - int(min_train))
+    if n_out < int(min_points) or n - n_out < int(min_train):
+        return None
+    rng = np.random.default_rng(int(seed))
+    outer_idx = np.sort(rng.choice(n, size=n_out, replace=False).astype(int))
+    mask = np.ones(n, dtype=bool)
+    mask[outer_idx] = False
+    train_idx = np.where(mask)[0].astype(int)
+    return train_idx, outer_idx
+
+
+def score_outer_holdout(
+    xy: np.ndarray,
+    z: np.ndarray,
+    train_idx: np.ndarray,
+    outer_idx: np.ndarray,
+    theta: Theta,
+    fixed: ModelFixed,
+    *,
+    invalid_penalty: float,
+) -> CVResult:
+    """Single holdout: train on ``train_idx``, score RMSE/MAE on ``outer_idx``."""
+    nug, sil = _nugget_sill(theta, fixed)
+    pred = _ok_predict(
+        xy, z, train_idx, outer_idx, theta, fixed, nug=nug, sil=sil
+    )
+    n_nan = int(np.isnan(pred).sum())
+    if n_nan > 0:
+        return CVResult(
+            rmse=float(invalid_penalty),
+            mae=float(invalid_penalty),
+            valid=False,
+            n_nan_predictions=n_nan,
+            details={"method": "outer_holdout", "reason": "NaN predictions"},
+        )
+    return CVResult(
+        rmse=rmse(z[outer_idx], pred),
+        mae=mae(z[outer_idx], pred),
+        valid=True,
+        n_nan_predictions=0,
+        details={
+            "method": "outer_holdout",
+            "n_train": int(len(train_idx)),
+            "n_outer": int(len(outer_idx)),
+        },
+    )
+
+
 def make_loo_indices(n_sample: int) -> list[int]:
     return list(range(int(n_sample)))
 

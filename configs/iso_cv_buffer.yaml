@@ -24,12 +24,12 @@ directional:
   min_pairs: 8
 
 search_space:
-  radius_margin: 0.60
+  radius_margin: 0.90
   # ISO: R box centre = a_iso * radius_prior_scale
   radius_prior_scale: 1.5
   nugget_margin: 0.60
-  range_scale_min: 0.40
-  range_scale_max: 1.60
+  range_scale_min: 0.10
+  range_scale_max: 1.90
   nmax_min: 5
   nmax_max: 80
 
@@ -39,8 +39,18 @@ cv:
   seed: 42
   allow_legacy: true  # LEGACY — only when explicitly requested
 
+
+outer_holdout:
+  enabled: true
+  fraction: 0.15
+  min_points: 10
+  max_fraction: 0.20
+  min_train: 20
+  seed: 43
+  patience: 300
+
 optuna:
-  n_trials: 800
+  n_trials: 1200
   seed: 42
   n_startup_trials: null
   n_ei_candidates: 64

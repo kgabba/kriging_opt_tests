@@ -43,7 +43,9 @@ from .cv import (
     make_buffered_delete_d_folds,
     make_delete_d_splits,
     make_kfold_splits,
+    make_outer_holdout_split,
     make_spatial_block_splits,
+    score_outer_holdout,
     spatial_block_score,
 )
 from .isotropy import explain_isotropy_selection, resolve_isotropy_mode, select_isotropy
@@ -367,10 +369,10 @@ def run_domain(
 
     space = build_search_space(
         fixed,
-        radius_margin=float(_cfg(cfg, "search_space", "radius_margin", default=0.60)),
+        radius_margin=float(_cfg(cfg, "search_space", "radius_margin", default=0.90)),
         nugget_margin=float(_cfg(cfg, "search_space", "nugget_margin", default=0.60)),
-        range_scale_min=float(_cfg(cfg, "search_space", "range_scale_min", default=0.40)),
-        range_scale_max=float(_cfg(cfg, "search_space", "range_scale_max", default=1.60)),
+        range_scale_min=float(_cfg(cfg, "search_space", "range_scale_min", default=0.10)),
+        range_scale_max=float(_cfg(cfg, "search_space", "range_scale_max", default=1.90)),
         nmax_min=int(_cfg(cfg, "search_space", "nmax_min", default=5)),
         nmax_max=int(_cfg(cfg, "search_space", "nmax_max", default=80)),
         radius_prior_scale=float(
@@ -382,49 +384,102 @@ def run_domain(
     cv_method = _resolve_cv_method(cfg)
     cv_seed = int(_cfg(cfg, "cv", "seed", default=_cfg(cfg, "delete_d", "seed", default=42)))
 
+    # Outer holdout for overfit monitor / early stopping (Optuna CV runs on remainder).
+    outer_enabled = bool(_cfg(cfg, "outer_holdout", "enabled", default=True))
+    outer_meta: dict[str, Any] | None = None
+    train_idx: np.ndarray | None = None
+    outer_idx: np.ndarray | None = None
+    outer_score_fn = None
+    outer_patience: int | None = None
+    xy_cv, z_cv, n_cv = xy, z, n
+    if outer_enabled:
+        split = make_outer_holdout_split(
+            n,
+            fraction=float(_cfg(cfg, "outer_holdout", "fraction", default=0.15)),
+            min_points=int(_cfg(cfg, "outer_holdout", "min_points", default=10)),
+            max_fraction=float(_cfg(cfg, "outer_holdout", "max_fraction", default=0.20)),
+            min_train=int(_cfg(cfg, "outer_holdout", "min_train", default=20)),
+            seed=int(_cfg(cfg, "outer_holdout", "seed", default=43)),
+        )
+        if split is None:
+            print(
+                f"[{domain}] outer_holdout skipped (n={n} too small)",
+                flush=True,
+            )
+        else:
+            train_idx, outer_idx = split
+            xy_cv = xy[train_idx]
+            z_cv = z[train_idx]
+            n_cv = int(len(train_idx))
+            outer_patience = int(_cfg(cfg, "outer_holdout", "patience", default=300))
+            outer_meta = {
+                "enabled": True,
+                "n_full": n,
+                "n_train": n_cv,
+                "n_outer": int(len(outer_idx)),
+                "fraction": float(len(outer_idx)) / float(n),
+                "patience": outer_patience,
+                "seed": int(_cfg(cfg, "outer_holdout", "seed", default=43)),
+                "note": "VG/MOI on full domain; Optuna CV on train; best θ by outer RMSE",
+            }
+            _tr, _ou = train_idx, outer_idx
+
+            def outer_score_fn(theta, _tr=_tr, _ou=_ou):  # noqa: F811
+                return score_outer_holdout(
+                    xy, z, _tr, _ou, theta, fixed, invalid_penalty=penalty
+                )
+
+            print(
+                f"[{domain}] outer_holdout n_outer={len(outer_idx)} "
+                f"n_train={n_cv} patience={outer_patience}",
+                flush=True,
+            )
+
     if cv_method == "loo":
         def objective_fn(theta):
-            return loo_score(xy, z, theta, fixed, invalid_penalty=penalty)
+            return loo_score(xy_cv, z_cv, theta, fixed, invalid_penalty=penalty)
 
-        cv_label = f"loo n={n}"
+        cv_label = f"loo n={n_cv}"
     elif cv_method == "kfold5":
         n_folds = int(_cfg(cfg, "cv", "n_folds", default=5))
-        test_folds = make_kfold_splits(n, n_folds=n_folds, seed=cv_seed)
+        test_folds = make_kfold_splits(n_cv, n_folds=n_folds, seed=cv_seed)
 
         def objective_fn(theta):
-            return kfold_score(xy, z, theta, fixed, test_folds, invalid_penalty=penalty)
+            return kfold_score(
+                xy_cv, z_cv, theta, fixed, test_folds, invalid_penalty=penalty
+            )
 
-        cv_label = f"kfold{n_folds} n={n} folds={len(test_folds)}"
+        cv_label = f"kfold{n_folds} n={n_cv} folds={len(test_folds)}"
     elif cv_method == "spatial_block":
         grid_nx = int(_cfg(cfg, "cv", "grid_nx", default=3))
         grid_ny = int(_cfg(cfg, "cv", "grid_ny", default=3))
-        test_folds = make_spatial_block_splits(xy, grid_nx=grid_nx, grid_ny=grid_ny)
+        test_folds = make_spatial_block_splits(xy_cv, grid_nx=grid_nx, grid_ny=grid_ny)
         if not test_folds:
             raise RuntimeError(f"spatial_block produced no folds for domain={domain}")
 
         def objective_fn(theta):
             return spatial_block_score(
-                xy, z, theta, fixed, test_folds,
+                xy_cv, z_cv, theta, fixed, test_folds,
                 invalid_penalty=penalty, grid_nx=grid_nx, grid_ny=grid_ny,
             )
 
-        cv_label = f"spatial_block {grid_nx}x{grid_ny} n={n} folds={len(test_folds)}"
+        cv_label = f"spatial_block {grid_nx}x{grid_ny} n={n_cv} folds={len(test_folds)}"
     elif cv_method == "buffer":
         buffer_radius = float(_cfg(cfg, "cv", "buffer_radius", default=0.4))
 
         def objective_fn(theta):
             return buffer_loo_score(
-                xy, z, theta, fixed,
+                xy_cv, z_cv, theta, fixed,
                 buffer_radius=buffer_radius, invalid_penalty=penalty,
             )
 
-        cv_label = f"buffer_loo r={buffer_radius} n={n}"
+        cv_label = f"buffer_loo r={buffer_radius} n={n_cv}"
     elif cv_method in ("buffered_delete_d", "buffer_delete_d"):
         holdout = _cfg(cfg, "cv", "holdout_size", default=None)
         if holdout is None:
             holdout = _cfg(cfg, "delete_d", "holdout_size", default=None)
-        holdout = default_holdout_size(n) if holdout is None else int(holdout)
-        holdout = min(holdout, n - 2)
+        holdout = default_holdout_size(n_cv) if holdout is None else int(holdout)
+        holdout = min(holdout, n_cv - 2)
         n_repeats = int(
             _cfg(
                 cfg,
@@ -433,7 +488,6 @@ def run_domain(
                 default=_cfg(cfg, "delete_d", "n_repeats", default=25),
             )
         )
-        # Prefer scale×a_major (aniso-aware); else absolute buffer_radius (legacy / iso)
         buffer_scale = _cfg(cfg, "cv", "buffer_scale", default=None)
         use_aniso_metric = bool(
             _cfg(cfg, "cv", "buffer_anisotropic", default=not fixed.isotropic)
@@ -447,7 +501,7 @@ def run_domain(
             buffer_scale = None
 
         folds = make_buffered_delete_d_folds(
-            xy,
+            xy_cv,
             holdout_size=holdout,
             n_repeats=n_repeats,
             buffer_radius=buffer_radius,
@@ -465,7 +519,7 @@ def run_domain(
 
         def objective_fn(theta):
             return buffered_delete_d_score(
-                xy, z, theta, fixed, folds,
+                xy_cv, z_cv, theta, fixed, folds,
                 buffer_radius=buffer_radius,
                 holdout_size=holdout,
                 invalid_penalty=penalty,
@@ -474,26 +528,27 @@ def run_domain(
             )
 
         cv_label = (
-            f"buffered_delete_d n={n} d={holdout} r={buffer_radius:.4g} "
+            f"buffered_delete_d n={n_cv} d={holdout} r={buffer_radius:.4g} "
             f"metric={buffer_metric} scale={buffer_scale} "
             f"repeats={len(folds)}/{n_repeats}"
         )
     else:
-        # default: delete-d (legacy)
         holdout = _cfg(cfg, "delete_d", "holdout_size", default=None)
-        holdout = default_holdout_size(n) if holdout is None else int(holdout)
-        holdout = min(holdout, n - 2)
+        holdout = default_holdout_size(n_cv) if holdout is None else int(holdout)
+        holdout = min(holdout, n_cv - 2)
         splits = make_delete_d_splits(
-            n,
+            n_cv,
             holdout_size=holdout,
             n_repeats=int(_cfg(cfg, "delete_d", "n_repeats", default=25)),
             seed=int(_cfg(cfg, "delete_d", "seed", default=cv_seed)),
         )
 
         def objective_fn(theta):
-            return delete_d_score(xy, z, theta, fixed, splits, invalid_penalty=penalty)
+            return delete_d_score(
+                xy_cv, z_cv, theta, fixed, splits, invalid_penalty=penalty
+            )
 
-        cv_label = f"delete-d n={n} d={holdout} repeats={len(splits)}"
+        cv_label = f"delete-d n={n_cv} d={holdout} repeats={len(splits)}"
 
     print(
         f"[{domain}] OK Optuna cv={cv_method} {cv_label} "
@@ -508,13 +563,17 @@ def run_domain(
         space=space,
         fixed=fixed,
         objective_fn=objective_fn,
-        n_trials=int(_cfg(cfg, "optuna", "n_trials", default=120)),
+        n_trials=int(_cfg(cfg, "optuna", "n_trials", default=1200)),
         seed=int(_cfg(cfg, "optuna", "seed", default=42)),
         out_csv=out_dir / "trials.csv",
         best_json=out_dir / "best_params_optuna.json",
         n_startup_trials=_cfg(cfg, "optuna", "n_startup_trials", default=None),
         n_ei_candidates=int(_cfg(cfg, "optuna", "n_ei_candidates", default=64)),
+        outer_score_fn=outer_score_fn,
+        outer_patience=outer_patience,
     )
+    if outer_meta is not None:
+        opt["outer_holdout"] = outer_meta
     payload_base["optimization"] = opt
     (out_dir / "best_params.json").write_text(
         json.dumps(payload_base, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -543,12 +602,28 @@ def _write_domain_summary_md(out_dir: Path, payload: dict[str, Any]) -> None:
         lines += ["", f"**Skipped:** {opt.get('reason')}"]
     elif opt:
         th = opt.get("best_theta") or {}
+        sel_m = opt.get("selection_metric") or "cv"
         lines += [
             "",
-            f"- CV best RMSE: **{opt.get('best_delete_d_rmse')}** "
+            f"- best by: **{sel_m}**",
+            f"- CV / outer best RMSE: **{opt.get('best_delete_d_rmse')}** "
             f"(eval {opt.get('best_evaluation')})",
-            f"- best θ: `{th}`",
         ]
+        if opt.get("best_outer_rmse") is not None:
+            lines.append(
+                f"- outer RMSE: **{opt.get('best_outer_rmse')}** "
+                f"(eval {opt.get('best_outer_evaluation')}); "
+                f"CV at that θ: {opt.get('best_cv_rmse')}"
+            )
+        oh = opt.get("outer_holdout") or {}
+        if oh:
+            lines.append(
+                f"- outer holdout: n={oh.get('n_outer')}/{oh.get('n_full')} "
+                f"patience={oh.get('patience')}"
+            )
+        if opt.get("early_stopped"):
+            lines.append(f"- early stop: {opt.get('stop_reason')}")
+        lines.append(f"- best θ: `{th}`")
     (out_dir / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
