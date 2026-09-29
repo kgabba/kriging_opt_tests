@@ -367,12 +367,12 @@ def run_domain(
 
     space = build_search_space(
         fixed,
-        radius_margin=float(_cfg(cfg, "search_space", "radius_margin", default=0.20)),
-        nugget_margin=float(_cfg(cfg, "search_space", "nugget_margin", default=0.20)),
-        range_scale_min=float(_cfg(cfg, "search_space", "range_scale_min", default=0.8)),
-        range_scale_max=float(_cfg(cfg, "search_space", "range_scale_max", default=1.2)),
+        radius_margin=float(_cfg(cfg, "search_space", "radius_margin", default=0.60)),
+        nugget_margin=float(_cfg(cfg, "search_space", "nugget_margin", default=0.60)),
+        range_scale_min=float(_cfg(cfg, "search_space", "range_scale_min", default=0.40)),
+        range_scale_max=float(_cfg(cfg, "search_space", "range_scale_max", default=1.60)),
         nmax_min=int(_cfg(cfg, "search_space", "nmax_min", default=5)),
-        nmax_max=int(_cfg(cfg, "search_space", "nmax_max", default=40)),
+        nmax_max=int(_cfg(cfg, "search_space", "nmax_max", default=80)),
         radius_prior_scale=float(
             _cfg(cfg, "search_space", "radius_prior_scale", default=1.0)
         ),

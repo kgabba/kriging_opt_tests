@@ -12,7 +12,7 @@ import pandas as pd
 from optuna.samplers import TPESampler
 
 from .cv import CVResult, ModelFixed, Theta
-from .search_space import SearchSpace
+from .search_space import SearchSpace, locked_r_minor
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
@@ -100,14 +100,12 @@ def run_tpe(
                 ),
             )
         else:
+            # Variant 2: search ellipse anisotropy locked to variogram
+            # (R_minor = R_major * a_minor/a_major); only scale R_major is tuned.
             r_maj = float(
                 trial.suggest_float("R_major", space.r_major_min, space.r_major_max)
             )
-            r_min = float(
-                trial.suggest_float("R_minor", space.r_minor_min, space.r_minor_max)
-            )
-            if r_min > r_maj:
-                r_maj, r_min = r_min, r_maj
+            r_min = locked_r_minor(r_maj, fixed.a_major, fixed.a_minor)
             theta = Theta(
                 r_major=r_maj,
                 r_minor=r_min,
@@ -164,7 +162,7 @@ def run_tpe(
             print(
                 f"  [{ev}/{n_trials}] phase={phase} "
                 f"RMSE={res.rmse:.6g} best={best_so_far:.6g} "
-                f"Rmaj={theta.r_major:.4g} Rmin={theta.r_minor:.4g} "
+                f"Rmaj={theta.r_major:.4g} Rmin={theta.r_minor:.4g}(locked) "
                 f"N={theta.n_max} nug={theta.nugget:.4g} scale={theta.range_scale:.3f}",
                 flush=True,
             )

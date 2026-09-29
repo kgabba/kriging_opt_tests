@@ -94,7 +94,9 @@ def ordinary_kriging_elliptical(
     range_scale :
         Multiplier applied to a_major (isotropic range in aniso metric).
     r_major, r_minor :
-        Search ellipse semi-axes.
+        Search ellipse semi-axes. Prefer locking
+        ``r_minor = r_major * (a_minor/a_major)`` (Optuna default) so the
+        search shape matches variogram anisotropy used for ``N_max`` ranking.
     n_max :
         Cap on neighbours inside the ellipse.
     n_fallback :

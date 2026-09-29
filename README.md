@@ -34,10 +34,19 @@ Also `summary.md` per domain and root `summary.md` with a Почему column.
 
 | Param | Window |
 |-------|--------|
-| `R_major`, `R_minor` (aniso) or `R` (iso) | ±`radius_margin` of fitted ranges (`a_iso` or directional) |
-| `N_max` | config box |
-| `nugget` | ±`nugget_margin` of fitted C₀ |
-| `range_scale` | config box (default 0.8–1.2) |
+| `R` (iso) or `R_major` (aniso) | ±`radius_margin` of fitted ranges (default **±60%**; `a_iso` or directional major) |
+| `N_max` | config box (default **5–80**) |
+| `nugget` | ±`nugget_margin` of fitted C₀ (default **±60%**) |
+| `range_scale` | config box (default **0.40–1.60**) |
+
+**`radius_prior_scale` (config):** used **only in ISO** — centre of the `R` box is
+`a_iso × radius_prior_scale` (often 1.5). **ANISO ignores it:** `R_major` box is
+centred on `a_major` (scale 1.0), then `R_minor` locked to variogram ratio.
+A `1.5` in an aniso/auto YAML does nothing for ANISO domains.
+
+**Aniso search shape (locked):** `R_minor = R_major × (a_minor/a_major)` — same
+anisotropy as the variogram. Optuna does **not** tune `R_minor` separately
+(avoids mismatch vs `N_max` ranking / γ metric).
 
 **Fixed:** iso → `a_iso` + sill; aniso → `alpha`, `a_major`/`a_minor`, sill.
 

@@ -15,6 +15,8 @@ class Theta:
     """Optuna-tunable OK neighbourhood / model knobs (alpha fixed outside).
 
     For isotropic mode ``r_minor`` is ignored / kept equal to ``r_major`` (= R).
+    For anisotropic mode ``r_minor`` is locked to
+    ``r_major * (a_minor/a_major)`` (variogram anisotropy); only ``r_major`` is tuned.
     """
 
     r_major: float

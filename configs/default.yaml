@@ -37,12 +37,12 @@ directional:
   min_pairs: 8
 
 search_space:
-  radius_margin: 0.20
-  nugget_margin: 0.20
-  range_scale_min: 0.80
-  range_scale_max: 1.20
+  radius_margin: 0.60
+  nugget_margin: 0.60
+  range_scale_min: 0.40
+  range_scale_max: 1.60
   nmax_min: 5
-  nmax_max: 40
+  nmax_max: 80
 
 # Production CV only: spatial_block | buffered_delete_d
 # Legacy (loo/kfold5/buffer/delete_d) require cv.allow_legacy: true

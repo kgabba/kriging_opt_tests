@@ -25,13 +25,14 @@ directional:
   min_pairs: 8
 
 search_space:
-  radius_margin: 0.20
+  radius_margin: 0.60
+  # unused while isotropic: false / ANISO — R_major centre = a_major (not × this)
   radius_prior_scale: 1.5
-  nugget_margin: 0.20
-  range_scale_min: 0.80
-  range_scale_max: 1.20
+  nugget_margin: 0.60
+  range_scale_min: 0.40
+  range_scale_max: 1.60
   nmax_min: 5
-  nmax_max: 40
+  nmax_max: 80
 
 cv:
   method: buffered_delete_d
