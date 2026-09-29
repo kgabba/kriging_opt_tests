@@ -28,32 +28,20 @@ def run_tpe(
     best_json: Path | None = None,
     n_startup_trials: int | None = None,
     n_ei_candidates: int = 64,
-    outer_score_fn: Callable[[Theta], CVResult] | None = None,
-    outer_patience: int | None = None,
 ) -> dict[str, Any]:
-    """Minimize CV RMSE; optionally track outer holdout + early stop.
+    """Minimize CV RMSE; print each trial and flush trials.csv.
 
-    Optuna always optimizes ``objective_fn`` (CV). If ``outer_score_fn`` is set,
-    the reported ``best_theta`` is the trial with best **outer** RMSE, and the
-    study stops after ``outer_patience`` trials without outer improvement.
+    Best θ is selected **only** by the CV objective (never by an outer holdout).
     """
     if n_startup_trials is None:
         n_startup_trials = max(10, int(0.3 * n_trials))
-    use_outer = outer_score_fn is not None
-    patience = int(outer_patience) if outer_patience is not None else 0
 
     rows: list[dict[str, Any]] = []
-    best_cv_rmse = float("inf")
+    best_rmse = float("inf")
     best_theta: Theta | None = None
     best_mae: float | None = None
     best_eval: int | None = None
     best_details: dict | None = None
-    best_outer_rmse = float("inf")
-    best_outer_mae: float | None = None
-    best_outer_eval: int | None = None
-    best_cv_at_outer: float | None = None
-    early_stopped = False
-    stop_reason: str | None = None
     eval_counter = {"n": 0}
     t0 = time.perf_counter()
 
@@ -65,25 +53,11 @@ def run_tpe(
             "n_trials": n_trials,
             "n_startup_trials": n_startup_trials,
             "status": "SUCCESS" if best_theta is not None else "RUNNING",
-            # Primary reported score: outer when enabled, else CV
-            "best_delete_d_rmse": (
-                None
-                if best_theta is None
-                else (best_outer_rmse if use_outer else best_cv_rmse)
-            ),
-            "best_delete_d_mae": best_mae if not use_outer else best_outer_mae,
+            "best_delete_d_rmse": None if best_theta is None else best_rmse,
+            "best_delete_d_mae": best_mae,
             "best_evaluation": best_eval,
             "best_theta": None if best_theta is None else best_theta.as_dict(),
-            "best_cv_rmse": None if best_theta is None else (
-                best_cv_at_outer if use_outer else best_cv_rmse
-            ),
-            "best_outer_rmse": None if not use_outer or best_theta is None else best_outer_rmse,
-            "best_outer_mae": best_outer_mae,
-            "best_outer_evaluation": best_outer_eval,
-            "selection_metric": "outer_holdout" if use_outer else "cv",
-            "outer_patience": patience if use_outer else None,
-            "early_stopped": early_stopped,
-            "stop_reason": stop_reason,
+            "selection_metric": "cv",
             "fixed": {
                 "alpha_deg": fixed.alpha_deg,
                 "a_major": fixed.a_major,
@@ -111,10 +85,7 @@ def run_tpe(
             )
 
     def _objective(trial: optuna.Trial) -> float:
-        nonlocal best_cv_rmse, best_theta, best_mae, best_eval, best_details
-        nonlocal best_outer_rmse, best_outer_mae, best_outer_eval, best_cv_at_outer
-        nonlocal early_stopped, stop_reason
-
+        nonlocal best_rmse, best_theta, best_mae, best_eval, best_details
         eval_counter["n"] += 1
         ev = eval_counter["n"]
 
@@ -134,6 +105,8 @@ def run_tpe(
                 ),
             )
         else:
+            # Search ellipse anisotropy locked to variogram
+            # (R_minor = R_major * a_minor/a_major); only scale R_major is tuned.
             r_maj = float(
                 trial.suggest_float("R_major", space.r_major_min, space.r_major_max)
             )
@@ -153,40 +126,16 @@ def run_tpe(
             )
         t_eval0 = time.perf_counter()
         res = objective_fn(theta)
-        outer_res: CVResult | None = None
-        if use_outer and res.valid:
-            outer_res = outer_score_fn(theta)  # type: ignore[misc]
         runtime = time.perf_counter() - t_eval0
 
-        if res.valid and res.rmse < best_cv_rmse:
-            best_cv_rmse = res.rmse
-            if not use_outer:
-                best_theta = theta
-                best_mae = res.mae
-                best_eval = ev
-                best_details = dict(res.details)
+        if res.valid and res.rmse < best_rmse:
+            best_rmse = res.rmse
+            best_theta = theta
+            best_mae = res.mae
+            best_eval = ev
+            best_details = dict(res.details)
 
-        outer_rmse = float("nan")
-        outer_mae = float("nan")
-        if outer_res is not None and outer_res.valid:
-            outer_rmse = outer_res.rmse
-            outer_mae = outer_res.mae
-            trial.set_user_attr("outer_rmse", float(outer_rmse))
-            if outer_rmse < best_outer_rmse:
-                best_outer_rmse = outer_rmse
-                best_outer_mae = outer_mae
-                best_outer_eval = ev
-                best_theta = theta
-                best_mae = outer_mae
-                best_eval = ev
-                best_details = dict(res.details)
-                best_cv_at_outer = res.rmse
-
-        best_so_far = (
-            best_outer_rmse
-            if use_outer and best_theta is not None
-            else (best_cv_rmse if best_theta is not None else float("nan"))
-        )
+        best_so_far = best_rmse if best_theta is not None else float("nan")
         row = {
             "evaluation": ev,
             "trial_number": trial.number,
@@ -197,8 +146,6 @@ def run_tpe(
             "range_scale": theta.range_scale,
             "RMSE_delete_d": res.rmse,
             "MAE_delete_d": res.mae,
-            "RMSE_outer": outer_rmse,
-            "MAE_outer": outer_mae,
             "valid": res.valid,
             "n_nan_predictions": res.n_nan_predictions,
             "runtime_seconds": runtime,
@@ -207,15 +154,10 @@ def run_tpe(
         rows.append(row)
 
         phase = "random" if ev <= n_startup_trials else "tpe"
-        outer_txt = (
-            f" outer={outer_rmse:.6g} best_outer={best_so_far:.6g}"
-            if use_outer
-            else f" best={best_so_far:.6g}"
-        )
         if fixed.isotropic:
             print(
                 f"  [{ev}/{n_trials}] phase={phase} "
-                f"CV={res.rmse:.6g}{outer_txt} "
+                f"RMSE={res.rmse:.6g} best={best_so_far:.6g} "
                 f"R={theta.r_major:.4g} N={theta.n_max} "
                 f"nug={theta.nugget:.4g} scale={theta.range_scale:.3f}",
                 flush=True,
@@ -223,7 +165,7 @@ def run_tpe(
         else:
             print(
                 f"  [{ev}/{n_trials}] phase={phase} "
-                f"CV={res.rmse:.6g}{outer_txt} "
+                f"RMSE={res.rmse:.6g} best={best_so_far:.6g} "
                 f"Rmaj={theta.r_major:.4g} Rmin={theta.r_minor:.4g}(locked) "
                 f"N={theta.n_max} nug={theta.nugget:.4g} scale={theta.range_scale:.3f}",
                 flush=True,
@@ -232,20 +174,6 @@ def run_tpe(
         trial.set_user_attr("valid", bool(res.valid))
         if ev % 25 == 0 or ev == n_trials:
             _flush()
-
-        if (
-            use_outer
-            and patience > 0
-            and best_outer_eval is not None
-            and (ev - best_outer_eval) >= patience
-        ):
-            early_stopped = True
-            stop_reason = (
-                f"outer_holdout no improve for {patience} trials "
-                f"(best_outer_eval={best_outer_eval})"
-            )
-            trial.study.stop()
-
         if not res.valid:
             raise optuna.TrialPruned("invalid_ok_configuration")
         return float(res.rmse)
@@ -259,8 +187,6 @@ def run_tpe(
     study = optuna.create_study(direction="minimize", sampler=sampler)
     study.optimize(_objective, n_trials=int(n_trials))
     print(flush=True)
-    if early_stopped:
-        print(f"  early stop: {stop_reason}", flush=True)
     _flush()
 
     out = _snapshot()

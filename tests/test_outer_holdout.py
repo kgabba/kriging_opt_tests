@@ -1,4 +1,4 @@
-"""Tests for outer holdout split + scoring helpers."""
+"""Tests for outer holdout split + scoring helpers (post-hoc monitor)."""
 
 from __future__ import annotations
 
@@ -11,7 +11,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from aniso_ok_tuner.cv import ModelFixed, Theta, make_outer_holdout_split, score_outer_holdout
+from aniso_ok_tuner.cv import (
+    ModelFixed,
+    Theta,
+    make_outer_holdout_split,
+    make_spatial_outer_holdout,
+    score_outer_holdout,
+)
 
 
 def test_outer_split_sizes():
@@ -25,6 +31,31 @@ def test_outer_split_sizes():
 
 def test_outer_split_too_small():
     assert make_outer_holdout_split(25, min_points=10, min_train=20) is None
+
+
+def test_spatial_outer_holdout_disjoint():
+    rng = np.random.default_rng(2)
+    # 3×3 grid of clusters → spatial cells well separated
+    xs, ys = np.meshgrid(np.linspace(0, 2, 3), np.linspace(0, 2, 3))
+    centers = np.column_stack([xs.ravel(), ys.ravel()])
+    pts = []
+    for c in centers:
+        pts.append(c + 0.05 * rng.normal(size=(12, 2)))
+    xy = np.vstack(pts)
+    split = make_spatial_outer_holdout(
+        xy, fraction=0.15, min_points=10, min_train=20, grid_nx=3, grid_ny=3, seed=0
+    )
+    assert split is not None
+    tr, ou = split
+    assert len(np.intersect1d(tr, ou)) == 0
+    assert len(tr) + len(ou) == len(xy)
+    assert len(ou) >= 10
+    assert len(tr) >= 20
+
+
+def test_spatial_outer_too_small():
+    xy = np.zeros((25, 2))
+    assert make_spatial_outer_holdout(xy, min_points=10, min_train=20) is None
 
 
 def test_score_outer_holdout_runs():
@@ -43,5 +74,7 @@ def test_score_outer_holdout_runs():
 if __name__ == "__main__":
     test_outer_split_sizes()
     test_outer_split_too_small()
+    test_spatial_outer_holdout_disjoint()
+    test_spatial_outer_too_small()
     test_score_outer_holdout_runs()
     print("ok")

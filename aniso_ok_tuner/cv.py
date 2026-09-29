@@ -195,11 +195,7 @@ def make_outer_holdout_split(
     min_train: int = 20,
     seed: int = 43,
 ) -> tuple[np.ndarray, np.ndarray] | None:
-    """Random outer holdout indices for overfit monitoring / early stopping.
-
-    Returns ``(train_idx, outer_idx)`` or ``None`` if the domain is too small
-    to spare a stable outer set.
-    """
+    """Random outer holdout indices (legacy / fallback). Prefer spatial split."""
     n = int(n_sample)
     if n < min_train + min_points:
         return None
@@ -212,6 +208,80 @@ def make_outer_holdout_split(
         return None
     rng = np.random.default_rng(int(seed))
     outer_idx = np.sort(rng.choice(n, size=n_out, replace=False).astype(int))
+    mask = np.ones(n, dtype=bool)
+    mask[outer_idx] = False
+    train_idx = np.where(mask)[0].astype(int)
+    return train_idx, outer_idx
+
+
+def make_spatial_outer_holdout(
+    xy: np.ndarray,
+    *,
+    fraction: float = 0.15,
+    min_points: int = 10,
+    max_fraction: float = 0.20,
+    min_train: int = 20,
+    grid_nx: int = 3,
+    grid_ny: int = 3,
+    seed: int = 43,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Spatial outer holdout: hold out whole grid cells until ~fraction of points.
+
+    Returns ``(train_idx, outer_idx)`` into rows of ``xy``, or ``None`` if too small.
+    """
+    xy = np.asarray(xy, dtype=float)
+    n = int(xy.shape[0])
+    if n < min_train + min_points:
+        return None
+    nx, ny = max(int(grid_nx), 1), max(int(grid_ny), 1)
+    xmin, ymin = xy.min(axis=0)
+    xmax, ymax = xy.max(axis=0)
+    dx = max(float(xmax - xmin), 1e-12)
+    dy = max(float(ymax - ymin), 1e-12)
+    ix = np.clip(((xy[:, 0] - xmin) / dx * nx).astype(int), 0, nx - 1)
+    iy = np.clip(((xy[:, 1] - ymin) / dy * ny).astype(int), 0, ny - 1)
+    cell_id = ix * ny + iy
+
+    cells: dict[int, np.ndarray] = {}
+    for c in np.unique(cell_id):
+        cells[int(c)] = np.where(cell_id == c)[0].astype(int)
+    nonempty = [c for c, idx in cells.items() if idx.size > 0]
+    if not nonempty:
+        return None
+
+    rng = np.random.default_rng(int(seed))
+    order = rng.permutation(nonempty)
+    target = max(int(min_points), int(round(n * float(np.clip(fraction, 0.01, 0.5)))))
+    max_out = min(int(n * float(np.clip(max_fraction, fraction, 0.5))), n - int(min_train))
+    if max_out < int(min_points):
+        return None
+
+    outer_list: list[int] = []
+    for c in order:
+        chunk = cells[int(c)]
+        if len(outer_list) + chunk.size > max_out and len(outer_list) >= int(min_points):
+            continue
+        if len(outer_list) + chunk.size > max_out:
+            # cell alone too big — skip unless we have nothing yet and cell fits min
+            if len(outer_list) == 0 and chunk.size <= max_out:
+                outer_list.extend(chunk.tolist())
+            break
+        outer_list.extend(chunk.tolist())
+        if len(outer_list) >= target:
+            break
+
+    if len(outer_list) < int(min_points) or n - len(outer_list) < int(min_train):
+        # fallback to random if spatial couldn't meet size constraints
+        return make_outer_holdout_split(
+            n,
+            fraction=fraction,
+            min_points=min_points,
+            max_fraction=max_fraction,
+            min_train=min_train,
+            seed=seed,
+        )
+
+    outer_idx = np.sort(np.asarray(outer_list, dtype=int))
     mask = np.ones(n, dtype=bool)
     mask[outer_idx] = False
     train_idx = np.where(mask)[0].astype(int)

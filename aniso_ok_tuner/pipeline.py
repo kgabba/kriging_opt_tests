@@ -34,6 +34,7 @@ from aniso_idw_mvp.variogram_map import build_variogram_map  # noqa: E402
 
 from .cv import (
     ModelFixed,
+    Theta,
     buffer_loo_score,
     buffered_delete_d_score,
     default_holdout_size,
@@ -45,6 +46,7 @@ from .cv import (
     make_kfold_splits,
     make_outer_holdout_split,
     make_spatial_block_splits,
+    make_spatial_outer_holdout,
     score_outer_holdout,
     spatial_block_score,
 )
@@ -237,10 +239,62 @@ def run_domain(
 ) -> dict[str, Any]:
     """Variography + Optuna OK tune for one Domain (isolated)."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    xy = df_domain[["X", "Y"]].to_numpy(dtype=float)
-    z = df_domain["Grade"].to_numpy(dtype=float)
-    n = len(df_domain)
+    xy_full = df_domain[["X", "Y"]].to_numpy(dtype=float)
+    z_full = df_domain["Grade"].to_numpy(dtype=float)
+    n_full = len(df_domain)
     n_min = int(_cfg(cfg, "n_min_points", default=15))
+
+    # Outer split FIRST (monitor only). VG/MOI/Optuna use train subset only.
+    outer_meta: dict[str, Any] | None = None
+    train_idx = np.arange(n_full, dtype=int)
+    outer_idx: np.ndarray | None = None
+    outer_enabled = bool(_cfg(cfg, "outer_holdout", "enabled", default=False))
+    if outer_enabled:
+        method = str(_cfg(cfg, "outer_holdout", "method", default="spatial")).lower()
+        oh_kw = dict(
+            fraction=float(_cfg(cfg, "outer_holdout", "fraction", default=0.15)),
+            min_points=int(_cfg(cfg, "outer_holdout", "min_points", default=10)),
+            max_fraction=float(_cfg(cfg, "outer_holdout", "max_fraction", default=0.20)),
+            min_train=int(_cfg(cfg, "outer_holdout", "min_train", default=20)),
+            seed=int(_cfg(cfg, "outer_holdout", "seed", default=43)),
+        )
+        if method == "random":
+            split = make_outer_holdout_split(n_full, **oh_kw)
+        else:
+            split = make_spatial_outer_holdout(
+                xy_full,
+                grid_nx=int(_cfg(cfg, "outer_holdout", "grid_nx", default=3)),
+                grid_ny=int(_cfg(cfg, "outer_holdout", "grid_ny", default=3)),
+                **oh_kw,
+            )
+        if split is None:
+            print(f"[{domain}] outer_holdout skipped (n={n_full} too small)", flush=True)
+        else:
+            train_idx, outer_idx = split
+            outer_meta = {
+                "enabled": True,
+                "method": method if method == "random" else "spatial",
+                "role": "post_hoc_monitor_only",
+                "n_full": n_full,
+                "n_train": int(len(train_idx)),
+                "n_outer": int(len(outer_idx)),
+                "fraction": float(len(outer_idx)) / float(n_full),
+                "seed": oh_kw["seed"],
+                "note": (
+                    "VG/MOI + Optuna CV on train only; best θ by CV; "
+                    "outer RMSE scored once after Optuna (not used for selection)"
+                ),
+            }
+            print(
+                f"[{domain}] outer_holdout method={outer_meta['method']} "
+                f"n_outer={len(outer_idx)} n_train={len(train_idx)} "
+                f"(post-hoc monitor; not for θ selection)",
+                flush=True,
+            )
+
+    xy = xy_full[train_idx]
+    z = z_full[train_idx]
+    n = int(len(train_idx))
 
     pairs = compute_pairs(xy, z)
     mode = resolve_isotropy_mode(cfg)
@@ -349,7 +403,8 @@ def run_domain(
 
     payload_base = {
         "domain": domain,
-        "n_points": n,
+        "n_points": n_full,
+        "n_train_tune": n,
         "isotropy_selection": selection,
         "moi": moi_payload,
         "directional": directional,
@@ -384,102 +439,49 @@ def run_domain(
     cv_method = _resolve_cv_method(cfg)
     cv_seed = int(_cfg(cfg, "cv", "seed", default=_cfg(cfg, "delete_d", "seed", default=42)))
 
-    # Outer holdout for overfit monitor / early stopping (Optuna CV runs on remainder).
-    outer_enabled = bool(_cfg(cfg, "outer_holdout", "enabled", default=True))
-    outer_meta: dict[str, Any] | None = None
-    train_idx: np.ndarray | None = None
-    outer_idx: np.ndarray | None = None
-    outer_score_fn = None
-    outer_patience: int | None = None
-    xy_cv, z_cv, n_cv = xy, z, n
-    if outer_enabled:
-        split = make_outer_holdout_split(
-            n,
-            fraction=float(_cfg(cfg, "outer_holdout", "fraction", default=0.15)),
-            min_points=int(_cfg(cfg, "outer_holdout", "min_points", default=10)),
-            max_fraction=float(_cfg(cfg, "outer_holdout", "max_fraction", default=0.20)),
-            min_train=int(_cfg(cfg, "outer_holdout", "min_train", default=20)),
-            seed=int(_cfg(cfg, "outer_holdout", "seed", default=43)),
-        )
-        if split is None:
-            print(
-                f"[{domain}] outer_holdout skipped (n={n} too small)",
-                flush=True,
-            )
-        else:
-            train_idx, outer_idx = split
-            xy_cv = xy[train_idx]
-            z_cv = z[train_idx]
-            n_cv = int(len(train_idx))
-            outer_patience = int(_cfg(cfg, "outer_holdout", "patience", default=300))
-            outer_meta = {
-                "enabled": True,
-                "n_full": n,
-                "n_train": n_cv,
-                "n_outer": int(len(outer_idx)),
-                "fraction": float(len(outer_idx)) / float(n),
-                "patience": outer_patience,
-                "seed": int(_cfg(cfg, "outer_holdout", "seed", default=43)),
-                "note": "VG/MOI on full domain; Optuna CV on train; best θ by outer RMSE",
-            }
-            _tr, _ou = train_idx, outer_idx
-
-            def outer_score_fn(theta, _tr=_tr, _ou=_ou):  # noqa: F811
-                return score_outer_holdout(
-                    xy, z, _tr, _ou, theta, fixed, invalid_penalty=penalty
-                )
-
-            print(
-                f"[{domain}] outer_holdout n_outer={len(outer_idx)} "
-                f"n_train={n_cv} patience={outer_patience}",
-                flush=True,
-            )
-
     if cv_method == "loo":
         def objective_fn(theta):
-            return loo_score(xy_cv, z_cv, theta, fixed, invalid_penalty=penalty)
+            return loo_score(xy, z, theta, fixed, invalid_penalty=penalty)
 
-        cv_label = f"loo n={n_cv}"
+        cv_label = f"loo n={n}"
     elif cv_method == "kfold5":
         n_folds = int(_cfg(cfg, "cv", "n_folds", default=5))
-        test_folds = make_kfold_splits(n_cv, n_folds=n_folds, seed=cv_seed)
+        test_folds = make_kfold_splits(n, n_folds=n_folds, seed=cv_seed)
 
         def objective_fn(theta):
-            return kfold_score(
-                xy_cv, z_cv, theta, fixed, test_folds, invalid_penalty=penalty
-            )
+            return kfold_score(xy, z, theta, fixed, test_folds, invalid_penalty=penalty)
 
-        cv_label = f"kfold{n_folds} n={n_cv} folds={len(test_folds)}"
+        cv_label = f"kfold{n_folds} n={n} folds={len(test_folds)}"
     elif cv_method == "spatial_block":
         grid_nx = int(_cfg(cfg, "cv", "grid_nx", default=3))
         grid_ny = int(_cfg(cfg, "cv", "grid_ny", default=3))
-        test_folds = make_spatial_block_splits(xy_cv, grid_nx=grid_nx, grid_ny=grid_ny)
+        test_folds = make_spatial_block_splits(xy, grid_nx=grid_nx, grid_ny=grid_ny)
         if not test_folds:
             raise RuntimeError(f"spatial_block produced no folds for domain={domain}")
 
         def objective_fn(theta):
             return spatial_block_score(
-                xy_cv, z_cv, theta, fixed, test_folds,
+                xy, z, theta, fixed, test_folds,
                 invalid_penalty=penalty, grid_nx=grid_nx, grid_ny=grid_ny,
             )
 
-        cv_label = f"spatial_block {grid_nx}x{grid_ny} n={n_cv} folds={len(test_folds)}"
+        cv_label = f"spatial_block {grid_nx}x{grid_ny} n={n} folds={len(test_folds)}"
     elif cv_method == "buffer":
         buffer_radius = float(_cfg(cfg, "cv", "buffer_radius", default=0.4))
 
         def objective_fn(theta):
             return buffer_loo_score(
-                xy_cv, z_cv, theta, fixed,
+                xy, z, theta, fixed,
                 buffer_radius=buffer_radius, invalid_penalty=penalty,
             )
 
-        cv_label = f"buffer_loo r={buffer_radius} n={n_cv}"
+        cv_label = f"buffer_loo r={buffer_radius} n={n}"
     elif cv_method in ("buffered_delete_d", "buffer_delete_d"):
         holdout = _cfg(cfg, "cv", "holdout_size", default=None)
         if holdout is None:
             holdout = _cfg(cfg, "delete_d", "holdout_size", default=None)
-        holdout = default_holdout_size(n_cv) if holdout is None else int(holdout)
-        holdout = min(holdout, n_cv - 2)
+        holdout = default_holdout_size(n) if holdout is None else int(holdout)
+        holdout = min(holdout, n - 2)
         n_repeats = int(
             _cfg(
                 cfg,
@@ -501,7 +503,7 @@ def run_domain(
             buffer_scale = None
 
         folds = make_buffered_delete_d_folds(
-            xy_cv,
+            xy,
             holdout_size=holdout,
             n_repeats=n_repeats,
             buffer_radius=buffer_radius,
@@ -519,7 +521,7 @@ def run_domain(
 
         def objective_fn(theta):
             return buffered_delete_d_score(
-                xy_cv, z_cv, theta, fixed, folds,
+                xy, z, theta, fixed, folds,
                 buffer_radius=buffer_radius,
                 holdout_size=holdout,
                 invalid_penalty=penalty,
@@ -528,27 +530,25 @@ def run_domain(
             )
 
         cv_label = (
-            f"buffered_delete_d n={n_cv} d={holdout} r={buffer_radius:.4g} "
+            f"buffered_delete_d n={n} d={holdout} r={buffer_radius:.4g} "
             f"metric={buffer_metric} scale={buffer_scale} "
             f"repeats={len(folds)}/{n_repeats}"
         )
     else:
         holdout = _cfg(cfg, "delete_d", "holdout_size", default=None)
-        holdout = default_holdout_size(n_cv) if holdout is None else int(holdout)
-        holdout = min(holdout, n_cv - 2)
+        holdout = default_holdout_size(n) if holdout is None else int(holdout)
+        holdout = min(holdout, n - 2)
         splits = make_delete_d_splits(
-            n_cv,
+            n,
             holdout_size=holdout,
             n_repeats=int(_cfg(cfg, "delete_d", "n_repeats", default=25)),
             seed=int(_cfg(cfg, "delete_d", "seed", default=cv_seed)),
         )
 
         def objective_fn(theta):
-            return delete_d_score(
-                xy_cv, z_cv, theta, fixed, splits, invalid_penalty=penalty
-            )
+            return delete_d_score(xy, z, theta, fixed, splits, invalid_penalty=penalty)
 
-        cv_label = f"delete-d n={n_cv} d={holdout} repeats={len(splits)}"
+        cv_label = f"delete-d n={n} d={holdout} repeats={len(splits)}"
 
     print(
         f"[{domain}] OK Optuna cv={cv_method} {cv_label} "
@@ -569,11 +569,43 @@ def run_domain(
         best_json=out_dir / "best_params_optuna.json",
         n_startup_trials=_cfg(cfg, "optuna", "n_startup_trials", default=None),
         n_ei_candidates=int(_cfg(cfg, "optuna", "n_ei_candidates", default=64)),
-        outer_score_fn=outer_score_fn,
-        outer_patience=outer_patience,
     )
-    if outer_meta is not None:
+
+    # Post-hoc outer monitor (never used for θ selection / early stop).
+    if outer_meta is not None and outer_idx is not None and opt.get("best_theta"):
+        th = opt["best_theta"]
+        theta_best = Theta(
+            r_major=float(th["R_major"]),
+            r_minor=float(th["R_minor"]),
+            n_max=int(th["N_max"]),
+            nugget=float(th["nugget"]),
+            range_scale=float(th["range_scale"]),
+        )
+        outer_res = score_outer_holdout(
+            xy_full,
+            z_full,
+            train_idx,
+            outer_idx,
+            theta_best,
+            fixed,
+            invalid_penalty=penalty,
+        )
+        outer_meta = {
+            **outer_meta,
+            "rmse": outer_res.rmse,
+            "mae": outer_res.mae,
+            "valid": outer_res.valid,
+            "n_nan_predictions": outer_res.n_nan_predictions,
+        }
         opt["outer_holdout"] = outer_meta
+        print(
+            f"[{domain}] post-hoc outer RMSE={outer_res.rmse:.6g} "
+            f"MAE={outer_res.mae:.6g} valid={outer_res.valid}",
+            flush=True,
+        )
+    elif outer_meta is not None:
+        opt["outer_holdout"] = outer_meta
+
     payload_base["optimization"] = opt
     (out_dir / "best_params.json").write_text(
         json.dumps(payload_base, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -590,7 +622,12 @@ def _write_domain_summary_md(out_dir: Path, payload: dict[str, Any]) -> None:
     lines = [
         f"# Domain `{payload.get('domain')}`",
         "",
-        f"- n_points: **{payload.get('n_points')}**",
+        f"- n_points: **{payload.get('n_points')}**"
+        + (
+            f" (train_tune={payload.get('n_train_tune')})"
+            if payload.get("n_train_tune") not in (None, payload.get("n_points"))
+            else ""
+        ),
         f"- geometry: **{'ISO' if fx.get('isotropic') else 'ANISO'}**",
     ]
     expl = sel.get("explanation")
@@ -606,23 +643,18 @@ def _write_domain_summary_md(out_dir: Path, payload: dict[str, Any]) -> None:
         lines += [
             "",
             f"- best by: **{sel_m}**",
-            f"- CV / outer best RMSE: **{opt.get('best_delete_d_rmse')}** "
+            f"- CV best RMSE: **{opt.get('best_delete_d_rmse')}** "
             f"(eval {opt.get('best_evaluation')})",
         ]
-        if opt.get("best_outer_rmse") is not None:
-            lines.append(
-                f"- outer RMSE: **{opt.get('best_outer_rmse')}** "
-                f"(eval {opt.get('best_outer_evaluation')}); "
-                f"CV at that θ: {opt.get('best_cv_rmse')}"
-            )
         oh = opt.get("outer_holdout") or {}
-        if oh:
+        if oh.get("enabled"):
+            rmse = oh.get("rmse")
+            rmse_s = f"{rmse:.6g}" if isinstance(rmse, (int, float)) else "—"
             lines.append(
-                f"- outer holdout: n={oh.get('n_outer')}/{oh.get('n_full')} "
-                f"patience={oh.get('patience')}"
+                f"- post-hoc outer ({oh.get('method')}): RMSE=**{rmse_s}** "
+                f"n={oh.get('n_outer')}/{oh.get('n_full')} "
+                f"(monitor only; not used for selection)"
             )
-        if opt.get("early_stopped"):
-            lines.append(f"- early stop: {opt.get('stop_reason')}")
         lines.append(f"- best θ: `{th}`")
     (out_dir / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 

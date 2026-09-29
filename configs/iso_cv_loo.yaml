@@ -40,16 +40,21 @@ cv:
 
 
 outer_holdout:
+  # Post-hoc monitor only: split first; VG/MOI/CV on train; score outer once after Optuna.
+  # Never used for θ selection or early stop.
   enabled: true
+  method: spatial  # spatial | random
   fraction: 0.15
   min_points: 10
   max_fraction: 0.20
   min_train: 20
+  grid_nx: 3
+  grid_ny: 3
   seed: 43
-  patience: 300
+
 
 optuna:
-  n_trials: 1200
+  n_trials: 800
   seed: 42
   n_startup_trials: null
   n_ei_candidates: 64

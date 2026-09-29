@@ -65,10 +65,11 @@ If empty → soft rescue: **4** nearest (same metric), not a full `N_max` grab.
 **Legacy** (`loo`, `kfold5`, `buffer`, `delete_d`): require `cv.allow_legacy: true` in the YAML.
 Do not use them unless the user explicitly asks. Default configs use `spatial_block`.
 
-**Outer holdout / early stop** (`outer_holdout` in YAML, on by default): ~15% of
-domain points held out of Optuna CV; each trial also scores that outer set.
-Best θ is chosen by **outer RMSE**; stop if no outer improve for `patience`
-(default **300**). Budget default **1200** trials.
+**Outer holdout (post-hoc monitor)** (`outer_holdout` in YAML): optional spatial
+(~15%) split **before** VG/MOI/Optuna. Train subset only is used for variography
+and CV; after Optuna finishes, the CV-best θ is scored **once** on the outer set.
+Outer RMSE is **never** used for θ selection or early stopping (that design
+overfit on Walker/Jura). Default method: `spatial` (`random` fallback).
 
 Ready-made: `auto_cv_spatial_block`, Walker aniso spatial/buffered; legacy iso CV suite marked `allow_legacy`.
 
