@@ -5,6 +5,9 @@ Per-**Domain** Ordinary Kriging → **Optuna TPE** on neighbourhood / nugget /
 
 Variography comes from sibling [`aniso_idw_mvp`](https://github.com/kgabba/spatial-idw-opt).
 
+**Benchmark logs:** [`experiments_datasets.ipynb`](experiments_datasets.ipynb) (SIC97, SIC2004),
+[`docs/project_story.md`](docs/project_story.md). Data: [`data3/`](data3/) (SIC97), [`data4/`](data4/) (SIC2004).
+
 ## Iso vs aniso
 
 | Config | Behaviour |
